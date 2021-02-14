@@ -1,0 +1,1 @@
+robocopy . \\192.168.0.6\Synology\synology-sync-dns-from-dhcp /mir /xd .git

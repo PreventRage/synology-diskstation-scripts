@@ -1,24 +1,20 @@
 #!/bin/bash
 
-ScriptDir=/var/services/homes/admin/synology-sync-dhcp-with-dns
+Name=synology-sync-dns-from-dhcp
+ScriptDir="/var/services/homes/admin/$Name"
+StartDir="/usr/local/etc/rc.d/"
 
 mkdir -p -v $ScriptDir
 
-InstallScript(){
-    cp -p -v ./$1 $ScriptDir
-    local File=$ScriptDir/$1
-    chmod -v u=rwx,go=rx $File
+Install(){
+    cp -p -v ./$1 $2
+    local File=$2/$1
+    chmod -v u=rw$3,go=r$3 $File
     chown -v root:root $File
 }
 
-InstallFile(){
-    cp -p -v ./$1 $ScriptDir
-    local File=$ScriptDir/$1
-    chmod -v u=rw,go=r $File
-    chown -v root:root $File
-}
-
-InstallScript diskstation_dns_modify.sh
-InstallScript poll-dhcp-changes.sh
-InstallFile settings
+Install $Name.sh $ScriptDir x
+Install control.sh $ScriptDir x
+Install settings $ScriptDir
+Install $Name.control.sh $StartDir x
 

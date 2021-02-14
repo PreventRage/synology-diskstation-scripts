@@ -1,53 +1,132 @@
 #!/bin/ash
-# These settings should be edited to match the settings of your existing DNS server configurtion on your synology server (Main Menu -> DNS Server -> Zones)
-#YourNetworkName -> Domain name column
-#ForwardMasterFile -> Zone ID column
-#ReverseMasterFile -> Zone ID column
-YourNetworkName=home.lan
-ForwardMasterFile=home.lan
-ReverseMasterFile=1.168.192.in-addr.arpa
 
-LOG_CONTEXT="-"  #override to add extra stuff to log messages
-date_echo(){
-    datestamp=$(date +%F_%T)
-    echo "${datestamp} ${LOG_CONTEXT} $*"
+ScriptPath=$0
+ScriptDir=$(dirname $ScriptPath)
+
+# -----------------------------------------------------------------------------
+
+Log(){
+    d=$(date +%F_%T)
+    echo "$d - $*"
 }
 
-overridesettings(){
-  # $1 is both script global variable name and the parameter name in settings file
-  settingsfile=$(dirname $0)/settings
+Fail(){
+  Log "Error:" "$@"
+  exit 1
+}
 
-  if [ -r $settingsfile ]; then
-    if ignoredresult=$(cat $settingsfile | grep $1=); then
-      value=$(cat $settingsfile | grep $1= | head -1 | cut -f2 -d"=")
-      eval "$1=$value"
-      date_echo "[overriding] $1=$value"
+# -----------------------------------------------------------------------------
+
+LogDir=$ScriptDir/logs
+BackupDir=$ScriptDir/dns-backups
+TempDir=$ScriptDir/temp
+
+if ! mkdir -p ${LogDir}; then
+  # The next line will probably fail as it tries to log stuff with no log directory but oh well
+  Fail "Cannot create log directory." 
+fi
+
+if ! mkdir -p ${BackupDir}; then
+  Fail "Cannot create backup directory."
+fi
+
+if ! mkdir -p ${TempDir}; then
+  Fail "Cannot create temp directory."
+fi
+
+# -----------------------------------------------------------------------------
+# Args
+
+Poll=
+Help=
+Verbose=
+
+for Arg in "$@"; do
+  if [ "$Arg" = "--poll" ] || [ "$Arg" = "-p" ]; then
+    Poll=poll
+  elif [ "$Arg" = "--help" ] || [ "$Arg" = "-h" ] || [ "$Arg" = "-?" ]; then
+    Help=help
+  elif [ "$Arg" = "--verbose" ] || [ "$Arg" = "-v" ]; then
+    Verbose=verbose
+  else
+    printf "Unknown argument [$Arg]. Try --help.\n"
+    exit 1
+  fi
+done
+
+# TODO: Actually write help
+
+
+# -----------------------------------------------------------------------------
+# Settings
+
+GetSetting(){
+  # $1 is both script global variable name and the parameter name in settings file
+  SettingsFile=$ScriptDir/settings
+  if [ -r $SettingsFile ]; then
+    # TODO Peter: I would like to know why "$(cat etc.)" doesn't work, why I have to assign it into an (ignored) variable
+    if _=$(cat $SettingsFile | grep $1=); then
+      _Value=$(cat $SettingsFile | grep $1= | head -1 | cut -f2 -d"=")
+      eval "$1=$_Value"
+    else
+      Fail "Error: Settings file [$SettingsFile] contained no setting [$1]."
     fi
   else
-    date_echo "WARNING: no settings file found.  Using default settings for $1"
+    Fail "Error: No settings file [$SettingsFile]."
   fi
 }
-date_echo " $0 starting..."
-# user specific settings are loaded from settings file, if present.  This makes upgrading this script easier.
-overridesettings YourNetworkName
-overridesettings ForwardMasterFile
-overridesettings ReverseMasterFile
 
-#todo automagically determine filenames for forward and reverse zones, so that this file does not need to be edited
-# to work in a default config
+GetSetting YourNetworkName
+GetSetting ForwardMasterFile
+GetSetting ReverseMasterFile
 
 
-#Note: the remainder of this script should not need to be modified
-# Note that backup path is also used as a temp folder.
-BackupPath=/var/services/homes/admin/scripts/dns_backups
-ZoneRootDir=/var/packages/DNSServer/target
-ZonePath=$ZoneRootDir/named/etc/zone/master
-DHCPAssigned=/etc/dhcpd/dhcpd.conf
+# -----------------------------------------------------------------------------
 
-NetworkInterfaces=",`ip -o link show | awk -F': ' '{printf $2","}'`"
+Update()(
+  # That ( makes this a "subshell" function)
 
-date_echo "Network interfaces:"
-date_echo $NetworkInterfaces
+  DhcpLogFile=/etc/dhcpd/dhcpd-leases.log
+  ZoneRootDir=/var/packages/DNSServer/target
+  ZonePath=$ZoneRootDir/named/etc/zone/master
+  DHCPAssigned=/etc/dhcpd/dhcpd.conf
+
+  Log "Updating DNS to reflect current DHCP state..."
+
+  NetworkInterfaces=",`ip -o link show | awk -F': ' '{printf $2","}'`"
+
+  Log "Network interfaces:"
+  Log $NetworkInterfaces
+)
+
+# -----------------------------------------------------------------------------
+# Actually do stuff!
+
+if [ "$Poll" ]; then
+  # Loop forever Update()ing whenever it seems necessary
+  while true; do    
+    ChangeTime=`stat $DhcpLogFile | grep Modify`
+    if [[ "$ChangeTime" != "$LastChangeTime" ]]; then
+      date
+      echo "DHCP state changed at [" + $ChangeTime + "]. Updating DNS."
+      Update
+      LastChangeTime=$ChangeTime
+    fi
+    sleep 5
+  done
+else
+  # Just Update() once
+  Update
+fi
+
+exit 0
+
+# -----------------------------------------------------------------------------
+# Bits to ripple up into the end of Update
+
+
+
+
 
 # An address may not have been assigned yet so verify
 # the leases log file exists before assigning.
@@ -76,15 +155,11 @@ DHCPLeaseFile=/etc/dhcpd/dhcpd.conf.leases
 # or b) file is backed up once each day... but only the first use and
 # retained for one year.
 #
-if ! mkdir -p ${BackupPath}; then
-  date_echo "Error: cannot create backup directory"
-  exit 3
-fi
 
-tmpPrefix=$BackupPath/DNS_Backup_$(date +%m%d)
-date_echo "Backing up DNS files to $tmpPrefix.*"
-[ -f $tmpPrefix.$ForwardMasterFile ] && date_echo "INFO: Forward master already backed up for today." || cp -a $ZonePath/$ForwardMasterFile $tmpPrefix.$ForwardMasterFile
-[ -f $tmpPrefix.$ReverseMasterFile ] && date_echo "INFO: Reverse master already backed up for today." || cp -a $ZonePath/$ReverseMasterFile $tmpPrefix.$ReverseMasterFile
+tmpPrefix=$BackupDir/DNS_Backup_$(date +%m%d)
+Log "Backing up DNS files to $tmpPrefix.*"
+[ -f $tmpPrefix.$ForwardMasterFile ] && Log "INFO: Forward master already backed up for today." || cp -a $ZonePath/$ForwardMasterFile $tmpPrefix.$ForwardMasterFile
+[ -f $tmpPrefix.$ReverseMasterFile ] && Log "INFO: Reverse master already backed up for today." || cp -a $ZonePath/$ReverseMasterFile $tmpPrefix.$ReverseMasterFile
 
 # Declare reusable functions.  Logic is pretty much the same for forward and reverse files.
 printPartialDNSFile () {
@@ -159,19 +234,19 @@ incrementSerial () {
 # The only exception are "ns.domain" records.  We keep those.
 #Assumptions:
 # PTR and A records should be removed unless they contain "ns.<YourNetworkName>."
-date_echo "Regenerating forward master file $ForwardMasterFile"
+Log "Regenerating forward master file $ForwardMasterFile"
 PARTIAL="$(printPartialDNSFile $ZonePath/$ForwardMasterFile)"
-date_echo "forward master file static DNS addresses:"
+Log "forward master file static DNS addresses:"
 echo "$PARTIAL"
 echo
 STATIC=$(echo "$PARTIAL"|awk '{if(NF>3 && NF<6) print $1}'| tr '\n' ',')
-echo "$PARTIAL"  > $BackupPath/$ForwardMasterFile.new
-date_echo "adding these DHCP leases to DNS forward master file:"
+echo "$PARTIAL"  > $BackupDir/$ForwardMasterFile.new
+Log "adding these DHCP leases to DNS forward master file:"
 printDhcpAsRecords "A" $STATIC
 echo
-printDhcpAsRecords "A" $STATIC >> $BackupPath/$ForwardMasterFile.new
+printDhcpAsRecords "A" $STATIC >> $BackupDir/$ForwardMasterFile.new
 
-incrementSerial $BackupPath/$ForwardMasterFile.new > $BackupPath/$ForwardMasterFile.bumped
+incrementSerial $BackupDir/$ForwardMasterFile.new > $BackupDir/$ForwardMasterFile.bumped
 
 ##########################################################################
 # REVERSE MASTER FILE - (Logic is the same for both)
@@ -179,40 +254,43 @@ incrementSerial $BackupPath/$ForwardMasterFile.new > $BackupPath/$ForwardMasterF
 # The only exception are "ns.domain" records.  We keep those.
 #Assumptions:
 # PTR and A records should be removed unless they contain "ns.<YourNetworkName>."
-date_echo "Regenerating reverse master file $ReverseMasterFile"
+Log "Regenerating reverse master file $ReverseMasterFile"
 PARTIAL="$(printPartialDNSFile $ZonePath/$ReverseMasterFile)"
 STATIC=$(echo "$PARTIAL"|awk '{if(NF>3 && NF<6) print $1}'| tr '\n' ',')
-date_echo "Reverse master file static DNS addresses:"
+Log "Reverse master file static DNS addresses:"
 echo "$PARTIAL"
 echo
-echo "$PARTIAL" > $BackupPath/$ReverseMasterFile.new
-date_echo "adding these DHCP leases to DNS reverse master file: "
+echo "$PARTIAL" > $BackupDir/$ReverseMasterFile.new
+Log "adding these DHCP leases to DNS reverse master file: "
 printDhcpAsRecords "PTR" $STATIC
 echo
-printDhcpAsRecords "PTR" $STATIC >> $BackupPath/$ReverseMasterFile.new
-incrementSerial $BackupPath/$ReverseMasterFile.new > $BackupPath/$ReverseMasterFile.bumped
+printDhcpAsRecords "PTR" $STATIC >> $BackupDir/$ReverseMasterFile.new
+incrementSerial $BackupDir/$ReverseMasterFile.new > $BackupDir/$ReverseMasterFile.bumped
 
 
 ##########################################################################
 # Ensure the owner/group and modes are set at default
 # then overwrite the original files
-date_echo "Overwriting with updated files: $ForwardMasterFile $ReverseMasterFile"
-if ! chown nobody:nobody $BackupPath/$ForwardMasterFile.bumped $BackupPath/$ReverseMasterFile.bumped ; then
-  date_echo "Error:  Cannot change file ownership"
-  date_echo ""
-  date_echo "Try running this script as root for correct permissions"
+Log "Overwriting with updated files: $ForwardMasterFile $ReverseMasterFile"
+if ! chown nobody:nobody $BackupDir/$ForwardMasterFile.bumped $BackupDir/$ReverseMasterFile.bumped ; then
+  Log "Error:  Cannot change file ownership"
+  Log ""
+  Log "Try running this script as root for correct permissions"
   exit 4
 fi
-chmod 644 $BackupPath/$ForwardMasterFile.bumped $BackupPath/$ReverseMasterFile.bumped
-#cp -a $BackupPath/$ForwardMasterFile.new $ZonePath/$ForwardMasterFile 
-#cp -a $BackupPath/$ReverseMasterFile.new $ZonePath/$ReverseMasterFile 
+chmod 644 $BackupDir/$ForwardMasterFile.bumped $BackupDir/$ReverseMasterFile.bumped
+#cp -a $BackupDir/$ForwardMasterFile.new $ZonePath/$ForwardMasterFile 
+#cp -a $BackupDir/$ReverseMasterFile.new $ZonePath/$ReverseMasterFile 
 
-mv -f $BackupPath/$ForwardMasterFile.bumped $ZonePath/$ForwardMasterFile
-mv -f $BackupPath/$ReverseMasterFile.bumped $ZonePath/$ReverseMasterFile
+mv -f $BackupDir/$ForwardMasterFile.bumped $ZonePath/$ForwardMasterFile
+mv -f $BackupDir/$ReverseMasterFile.bumped $ZonePath/$ReverseMasterFile
 
-##########################################################################
+# -----------------------------------------------------------------------------
 # Reload the server config after modifications
 $ZoneRootDir/script/reload.sh
 
-date_echo "$0 complete."
+Log "$0 complete."
 exit 0
+
+
+
