@@ -15,22 +15,23 @@ Fail(){
   exit 1
 }
 
-EchoBeginOrEnd(){
-  if [ ! $2 ]; then
-    l=$( (${#2} + 1) )
+EchoOver(){
+  if [ "$1" ]; then
+    c=$((${#1}+1))
       # expression containing an arithmetic expression
-      # ${#varname} is string length of value of varname
-    echo "$2 ${1:$l}"
+      # ${#varname} is length of value of varname
+    echo "$1 ${2:$c}"
   else
+    echo "$2"
   fi
 }
 
 EchoBegin(){
-  EchoBeginOrEnd ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>" "$1"
+  EchoOver "$1" ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
 }
 
 EchoEnd(){
-  EchoBeginOrEnd "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<" "$1"
+  EchoOver "$1" "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
 }
 
 # -----------------------------------------------------------------------------
@@ -165,7 +166,7 @@ Update()(
 
   # ---------------------------------------------------------------------------
 
-  FilterDnsFile () {
+  DnsZoneFileContentsWithoutDynamicHosts () {
     # Pass in the DNS file to process (forward or reverse master)
     # Filters out any line/record that ends with ;dynamic (those that came from DHCP)
     # to create the start point of an update.
@@ -188,30 +189,53 @@ Update()(
     # Process the DHCP static and dynamic records
     # Logic is the same for PTR and A records.  Just a different print output.
     # Sorts and remove duplicates. Filters records you don't want.
-    awk -v YourNetworkName=$YourNetworkName -v RecordType=$1  -v StaticRecords=$2 -v adapters=$NetworkInterfaces '
+    awk -v YourNetworkName=$YourNetworkName -v RecordType=$1  -v StaticRecords=$2 -v NetworkInterfaces=$NetworkInterfaces '
       BEGIN {
         # Set awks field separator
         FS="[\t =,]";
       }
-      {IP=""} # clear out variables
+
+      {
+        IpAddress=""
+        Name=""
+        Ttl=""
+      }
+
       # Leases start with numbers. Do not use if column 4 is an interface
-      $1 ~ /^[0-9]/ { if(NF>4 || index(adapters, "," $4 "," ) == 0) { IP=$3; NAME=$4; RENEW=86400 } } 
+      $1 ~ /^[0-9]/ {
+        if (NF > 4 || index(NetworkInterfaces, "," $4 "," ) == 0) {
+          IpAddress=$3
+          Name=$4
+          Ttl=86400
+        }
+      }
+
       # Static assignments start with dhcp-host
-      $1 == "dhcp-host" {IP=$4; NAME=$3; RENEW=$5}
-      # If we have an IP and a NAME (and if name is not a placeholder)
-      (IP != "" && NAME!="*" && NAME!="") {
-        split(IP,arr,".");
-        ReverseIP = arr[4] "." arr[3] "." arr[2] "." arr[1];
-        if (RecordType == "PTR" && index(StaticRecords, ReverseIP ".in-addr.arpa.," ) > 0) {IP="";}
-        if (RecordType == "A" && index(StaticRecords, NAME "." YourNetworkName ".," ) > 0) {IP="";}
+      $1 == "dhcp-host" {
+        IpAddress=$4
+        Name=$3
+        Ttl=$5
+      }
+
+      # If we have an IpAddress and a Name (and if Name is not a placeholder)
+      # then we will print a Host Record
+      (IpAddress != "" && Name != "" && Name != "*") {
+        split(IpAddress, IpAddressAsArray, ".")
+        ReverseIP = IpAddressAsArray[4] "." IpAddressAsArray[3] "." IpAddressAsArray[2] "." IpAddressAsArray[1]
+        if (RecordType == "A" && index(StaticRecords, Name "." YourNetworkName ".," ) > 0) {
+          IpAddress=""
+        }
+        if (RecordType == "PTR" && index(StaticRecords, ReverseIP ".in-addr.arpa.," ) > 0) {
+          IpAddress=""
+        }
         # Remove invalid characters according to rfc952
-        gsub(/([^a-zA-Z0-9-]*|^[-]*|[-]*$)/,"",NAME)
-        # Print the last number in the IP address so we can sort the addresses
+        gsub(/([^a-zA-Z0-9-]*|^[-]*|[-]*$)/,"",Name)
+        # Print the last number in the IpAddress address so we can sort the addresses
         # Add a tab character so that "cut" sees two fields... it will print the second
-        # field and remove the first which is the last number in the IP address.
-        if(IP != "" && NAME!="*" && NAME!="") {
-            if (RecordType == "PTR") {print 1000 + arr[4] "\t" ReverseIP ".in-addr.arpa.\t" RENEW "\tPTR\t" NAME "." YourNetworkName ".\t;dynamic"}
-            if (RecordType == "A") print 2000 + arr[4] "\t" NAME "." YourNetworkName ".\t" RENEW "\tA\t" IP "\t;dynamic"
+        # field and remove the first which is the last number in the IpAddress address.
+        if(IpAddress != "" && Name!="*" && Name!="") {
+            if (RecordType == "PTR") {print 1000 + IpAddressAsArray[4] "\t" ReverseIP ".in-addr.arpa.\t" Ttl "\tPTR\t" Name "." YourNetworkName ".\t;dynamic"}
+            if (RecordType == "A") print 2000 + IpAddressAsArray[4] "\t" Name "." YourNetworkName ".\t" Ttl "\tA\t" IpAddress "\t;dynamic"
         }
       }
     ' $DhcpAssignedFiles | sort | cut -f 2- | uniq	
@@ -263,48 +287,35 @@ Update()(
   # The only exception are "ns.domain" records.  We keep those.
   #Assumptions:
   # PTR and A records should be removed unless they contain "ns.<YourNetworkName>."
-  ExistingDnsZoneFile=$ZonePath/$ForwardMasterFile
   Log "Updating forward master [$ForwardMasterFile]"
+  ExistingDnsZoneFile=$ZonePath/$ForwardMasterFile
+
   ExistingDnsZoneFileContent="$(cat $ExistingDnsZoneFile)"
-  EchoBegin "ExistingDnsZoneFileContent"
-  echo "$ExistingDnsZoneFileContent"
-  echo "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
-  FilteredDnsZoneFileContent="$(FilterDnsFile $ExistingDnsZoneFile)"
-  echo "FilteredDnsZoneFileContent"
-  echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
-  echo "$FilteredDnsZoneFileContent"
-  echo "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+  if [ "$Verbose" ]; then
+    EchoBegin "ExistingDnsZoneFileContent"
+    echo "$ExistingDnsZoneFileContent"
+    EchoEnd "ExistingDnsZoneFileContent"
+  fi
+
+  FilteredDnsZoneFileContent="$(DnsZoneFileContentsWithoutDynamicHosts $ExistingDnsZoneFile)"
+  if [ "$Verbose" ]; then
+    EchoBegin "FilteredDnsZoneFileContent"
+    echo "$FilteredDnsZoneFileContent"
+    EchoEnd "FilteredDnsZoneFileContent"
+  fi
+
   StaticHostNames=$(GetStaticHostNamesFromDnsZoneFileContent "$FilteredDnsZoneFileContent")
-  #   echo "$FilteredDnsContents" |
-  #   awk '
-  #     BEGIN {
-  #       # Set awks field separator
-  #       FS="\t"
-  #     }
-  #     {
-  #       # Theres some non-host-record lines at the start of a zone file but conveniently
-  #       # they all have 0 or 1 tab character in them and thus 1 or 2 "fields" according
-  #       # to awk.
-  #       # Then a more subtle filter. We also omit any host-records that have 3 fields
-  #       # (which will be host name, record type, address) because they dont have a TTL
-  #       # field. Which avoids the namespace records (there seem usually to be two,
-  #       # one of type NS and one of type A/host).
-  #       # We also filter out any record with more then 5 fields presuming that the 6th
-  #       # field would be a ;dynamic comment.
-  #       if (NF>3 && NF<6 && ($3 == "A" || $4 == "A")) print $1
-  #     }
-  #   ' |
-  #   tr '\n' ','
-  # )
-  echo "StaticHostNames"
-  echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
-  echo "$StaticHostNames"
-  echo "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+  if [ "$Verbose" ]; then
+    EchoBegin "StaticHostNames"
+    echo $StaticHostNames
+    EchoEnd "StaticHostNames"
+  fi
+
+  printDhcpAsRecords "A" $StaticHostNames
+
   #echo "$FilteredDnsContents" > $BackupDir/$ForwardMasterFile.new
   #Log "adding these DHCP leases to DNS forward master file:"
   #printDhcpAsRecords "A" $STATIC
-
-
 
   #STATIC=$(echo "$PARTIAL"|awk '{if(NF>3 && NF<6) print $1}'| tr '\n' ',')
   #echo "$PARTIAL"  > $BackupDir/$ForwardMasterFile.new
@@ -359,7 +370,7 @@ exit 0
 #Assumptions:
 # PTR and A records should be removed unless they contain "ns.<YourNetworkName>."
 Log "Regenerating reverse master file $ReverseMasterFile"
-PARTIAL="$(FilterDnsFile $ZonePath/$ReverseMasterFile)"
+PARTIAL="$(DnsZoneFileContentsWithoutDynamicHosts $ZonePath/$ReverseMasterFile)"
 STATIC=$(echo "$PARTIAL"|awk '{if(NF>3 && NF<6) print $1}'| tr '\n' ',')
 Log "Reverse master file static DNS addresses:"
 echo "$PARTIAL"
