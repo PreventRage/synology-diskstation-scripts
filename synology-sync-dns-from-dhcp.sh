@@ -121,23 +121,23 @@ Update()(
   Log "Network interfaces: $NetworkInterfaces"
 
   # ---------------------------------------------------------------------------
-  DhcpAssignedFiles=/etc/dhcpd/dhcpd.conf
+  DhcpFiles=/etc/dhcpd/dhcpd.conf
 
   f=/etc/dhcpd/dhcpd-leases.log
-  [ -f $f ] && DhcpAssignedFiles="$DhcpAssignedFiles $f"
+  [ -f $f ] && DhcpFiles="$DhcpFiles $f"
 
   f=/etc/dhcpd/dhcpd-static-static.conf
   # this file may not exist if you haven't configured anything in the dhcp static reservations list (mac addr -> ip addr)
-  [ -f $f ] && DhcpAssignedFiles="$DhcpAssignedFiles $f"
+  [ -f $f ] && DhcpFiles="$DhcpFiles $f"
 
   f=/etc/dhcpd/dhcpd-eth0-static.conf
   #Reportedly, this is the name of the leases file under DSM 6.0.  If it exists, we scan it.
-  [ -f $f ] && DhcpAssignedFiles="$DhcpAssignedFiles $f"
+  [ -f $f ] && DhcpFiles="$DhcpFiles $f"
 
   f=/etc/dhcpd/dhcpd.conf.leases
-  [ -f $f ] && DhcpAssignedFiles="$DhcpAssignedFiles $f"
+  [ -f $f ] && DhcpFiles="$DhcpFiles $f"
 
-  Log "DHCP Files: $DhcpAssignedFiles"
+  Log "DHCP Files: $DhcpFiles"
 
   # ---------------------------------------------------------------------------
   # TODO: Verify files exist and appropriate rights are granted
@@ -167,9 +167,10 @@ Update()(
   # ---------------------------------------------------------------------------
 
   DnsZoneFileContentsWithoutDynamicHosts () {
-    # Pass in the DNS file to process (forward or reverse master)
+    # Pass in the contents of a DNS Zone File (forward or reverse master)
     # Filters out any line/record that ends with ;dynamic (those that came from DHCP)
     # to create the start point of an update.
+    echo "$1" |
     awk '
       {
         if ($5 != ";dynamic") {
@@ -179,17 +180,18 @@ Update()(
         }
       }
       (PrintThis == 1) {print $0 }
-    ' $1
+    '
   }
 
   # ---------------------------------------------------------------------------
 
-  printDhcpAsRecords () {
-    # Pass in "A" for A records and "PTR" for PTR records.
+  DhcpAsDnsHostRecords () {
+    # Pass in $1 "A" for A records and "PTR" for PTR records.
     # Process the DHCP static and dynamic records
-    # Logic is the same for PTR and A records.  Just a different print output.
+    # Pass in $2 a comma-delimited list of records to ignore (presumably because they're already in the DNS zone file)
+    # Logic is the same for PTR and A records. Just a different print output.
     # Sorts and remove duplicates. Filters records you don't want.
-    awk -v YourNetworkName=$YourNetworkName -v RecordType=$1  -v StaticRecords=$2 -v NetworkInterfaces=$NetworkInterfaces '
+    awk -v YourNetworkName=$YourNetworkName -v RecordType=$1  -v IgnoreHosts=$2 -v NetworkInterfaces=$NetworkInterfaces '
       BEGIN {
         # Set awks field separator
         FS="[\t =,]";
@@ -217,33 +219,40 @@ Update()(
         Ttl=$5
       }
 
-      # If we have an IpAddress and a Name (and if Name is not a placeholder)
-      # then we will print a Host Record
-      (IpAddress != "" && Name != "" && Name != "*") {
-        split(IpAddress, IpAddressAsArray, ".")
-        ReverseIP = IpAddressAsArray[4] "." IpAddressAsArray[3] "." IpAddressAsArray[2] "." IpAddressAsArray[1]
-        if (RecordType == "A" && index(StaticRecords, Name "." YourNetworkName ".," ) > 0) {
-          IpAddress=""
+      {
+        if (IpAddress == "" || Name == "" || Name == "*") { next } # not a host
+
+        split(IpAddress, IpA, ".")
+        IpAddressReversed = IpA[4] "." IpA[3] "." IpA[2] "." IpA[1]
+
+        # Ignore some hosts
+        if (RecordType == "A") {
+          if (index(IgnoreHosts, Name "." YourNetworkName ".," ) > 0) { next }
         }
-        if (RecordType == "PTR" && index(StaticRecords, ReverseIP ".in-addr.arpa.," ) > 0) {
-          IpAddress=""
+        else if (RecordType == "PTR") {
+          if (index(IgnoreHosts, IpAddressReversed ".in-addr.arpa.," ) > 0) { next }
         }
+
         # Remove invalid characters according to rfc952
-        gsub(/([^a-zA-Z0-9-]*|^[-]*|[-]*$)/,"",Name)
-        # Print the last number in the IpAddress address so we can sort the addresses
-        # Add a tab character so that "cut" sees two fields... it will print the second
-        # field and remove the first which is the last number in the IpAddress address.
-        if(IpAddress != "" && Name!="*" && Name!="") {
-            if (RecordType == "PTR") {print 1000 + IpAddressAsArray[4] "\t" ReverseIP ".in-addr.arpa.\t" Ttl "\tPTR\t" Name "." YourNetworkName ".\t;dynamic"}
-            if (RecordType == "A") print 2000 + IpAddressAsArray[4] "\t" Name "." YourNetworkName ".\t" Ttl "\tA\t" IpAddress "\t;dynamic"
+        gsub(/([^a-zA-Z0-9-]*|^[-]*|[-]*$)/, "", Name)
+        if (Name == "") { next }
+
+        # We sort by IpAddress and then remove it using cut
+
+        Key=((((((((IpA[0] * 256) + IpA[1]) * 256) + IpA[2]) * 256) + IpA[3]) * 256) + IpA[4])
+        if (RecordType == "A") {
+          print Key "\t" Name "." YourNetworkName ".\t" Ttl "\tA\t" IpAddress "\t;dynamic"
+        }
+        else if (RecordType == "PTR") {
+          print Key "\t" IpAddressReversed ".in-addr.arpa.\t" Ttl "\tPTR\t" Name "." YourNetworkName ".\t;dynamic"
         }
       }
-    ' $DhcpAssignedFiles | sort | cut -f 2- | uniq	
+    ' $DhcpFiles | sort | cut -f 2- | uniq	
   }
 
   # ---------------------------------------------------------------------------
 
-  GetStaticHostNamesFromDnsZoneFileContent () {
+  HostNamesFromDnsZoneFileContent () {
     echo "$1" |
     awk '
       BEGIN {
@@ -290,39 +299,39 @@ Update()(
   Log "Updating forward master [$ForwardMasterFile]"
   ExistingDnsZoneFile=$ZonePath/$ForwardMasterFile
 
-  ExistingDnsZoneFileContent="$(cat $ExistingDnsZoneFile)"
+  ExistingDnsZoneFileContent=$(cat $ExistingDnsZoneFile)
   if [ "$Verbose" ]; then
     EchoBegin "ExistingDnsZoneFileContent"
     echo "$ExistingDnsZoneFileContent"
     EchoEnd "ExistingDnsZoneFileContent"
   fi
 
-  FilteredDnsZoneFileContent="$(DnsZoneFileContentsWithoutDynamicHosts $ExistingDnsZoneFile)"
+  FilteredDnsZoneFileContent=$(DnsZoneFileContentsWithoutDynamicHosts "$ExistingDnsZoneFileContent")
   if [ "$Verbose" ]; then
     EchoBegin "FilteredDnsZoneFileContent"
     echo "$FilteredDnsZoneFileContent"
     EchoEnd "FilteredDnsZoneFileContent"
   fi
 
-  StaticHostNames=$(GetStaticHostNamesFromDnsZoneFileContent "$FilteredDnsZoneFileContent")
+  KeptHostNames=$(HostNamesFromDnsZoneFileContent "$FilteredDnsZoneFileContent")
   if [ "$Verbose" ]; then
-    EchoBegin "StaticHostNames"
-    echo $StaticHostNames
-    EchoEnd "StaticHostNames"
+    EchoBegin "KeptHostNames"
+    echo $KeptHostNames
+    EchoEnd "KeptHostNames"
   fi
 
-  printDhcpAsRecords "A" $StaticHostNames
+  DhcpAsDnsHostRecords "A" $KeptHostNames
 
   #echo "$FilteredDnsContents" > $BackupDir/$ForwardMasterFile.new
   #Log "adding these DHCP leases to DNS forward master file:"
-  #printDhcpAsRecords "A" $STATIC
+  #DhcpAsDnsHostRecords "A" $STATIC
 
   #STATIC=$(echo "$PARTIAL"|awk '{if(NF>3 && NF<6) print $1}'| tr '\n' ',')
   #echo "$PARTIAL"  > $BackupDir/$ForwardMasterFile.new
   #Log "adding these DHCP leases to DNS forward master file:"
-  #printDhcpAsRecords "A" $STATIC
+  #DhcpAsDnsHostRecords "A" $STATIC
   #echo
-  #printDhcpAsRecords "A" $STATIC >> $BackupDir/$ForwardMasterFile.new
+  #DhcpAsDnsHostRecords "A" $STATIC >> $BackupDir/$ForwardMasterFile.new
 
   #incrementSerial $BackupDir/$ForwardMasterFile.new > $BackupDir/$ForwardMasterFile.bumped
 )
@@ -377,9 +386,9 @@ echo "$PARTIAL"
 echo
 echo "$PARTIAL" > $BackupDir/$ReverseMasterFile.new
 Log "adding these DHCP leases to DNS reverse master file: "
-printDhcpAsRecords "PTR" $STATIC
+DhcpAsDnsHostRecords "PTR" $STATIC
 echo
-printDhcpAsRecords "PTR" $STATIC >> $BackupDir/$ReverseMasterFile.new
+DhcpAsDnsHostRecords "PTR" $STATIC >> $BackupDir/$ReverseMasterFile.new
 incrementSerial $BackupDir/$ReverseMasterFile.new > $BackupDir/$ReverseMasterFile.bumped
 
 
