@@ -1,0 +1,68 @@
+$ORIGIN engrav.net.
+$TTL 86400
+engrav.net. IN SOA ns.engrav.net. mail.engrav.net. (
+	12173 ;
+	43200
+	180
+	1209600
+	10800
+)
+G2.engrav.net.	86400	A	192.168.0.2
+G1.engrav.net.	86400	A	192.168.0.1
+S4.engrav.net.	86400	A	192.168.0.6
+engrav.net.	NS	ns.engrav.net.
+ns.engrav.net.	A	205.171.2.25
+01-KitchenWAP03.engrav.net.	86400	A	192.168.5.4	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.10	;dynamic
+Kitchen3.engrav.net.	86400	A	192.168.5.12	;dynamic
+Peter2.engrav.net.	86400	A	192.168.5.13	;dynamic
+android-7a14ca15185b912c.engrav.net.	86400	A	192.168.5.19	;dynamic
+sav-001aae0dbd8a0000.engrav.net.	86400	A	192.168.5.21	;dynamic
+Cameron1B.engrav.net.	86400	A	192.168.5.24	;dynamic
+Peter1.engrav.net.	86400	A	192.168.5.25	;dynamic
+ESPC53076.engrav.net.	86400	A	192.168.5.27	;dynamic
+Switch04Crawlspace.engrav.net.	86400	A	192.168.5.28	;dynamic
+TIVO-849000190479C33.engrav.net.	86400	A	192.168.5.35	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.39	;dynamic
+00-ProjectRoomWAP04.engrav.net.	86400	A	192.168.5.40	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.53	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.54	;dynamic
+Living-Room.engrav.net.	86400	A	192.168.5.57	;dynamic
+iPad.engrav.net.	86400	A	192.168.5.68	;dynamic
+amazon-29e9c5678.engrav.net.	86400	A	192.168.5.69	;dynamic
+Charlotte1.engrav.net.	86400	A	192.168.5.77	;dynamic
+DESKTOP-KSC4V65.engrav.net.	86400	A	192.168.5.87	;dynamic
+Switch02Theater.engrav.net.	86400	A	192.168.5.89	;dynamic
+Linux.engrav.net.	86400	A	192.168.5.104	;dynamic
+Music.engrav.net.	86400	A	192.168.5.105	;dynamic
+Peter0.engrav.net.	86400	A	192.168.5.106	;dynamic
+SQL.engrav.net.	86400	A	192.168.5.107	;dynamic
+NX595E.engrav.net.	86400	A	192.168.5.108	;dynamic
+Teresa1.engrav.net.	86400	A	192.168.5.110	;dynamic
+TIVO-A9505C9E355954A.engrav.net.	86400	A	192.168.5.126	;dynamic
+PES8.engrav.net.	86400	A	192.168.5.140	;dynamic
+Switch01MEC.engrav.net.	86400	A	192.168.5.144	;dynamic
+Switch03MainLevelPantry.engrav.net.	86400	A	192.168.5.145	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.150	;dynamic
+Kitchen2.engrav.net.	86400	A	192.168.5.151	;dynamic
+TIVO-A9509B2B232E3C0.engrav.net.	86400	A	192.168.5.153	;dynamic
+amazon-fdffa979d.engrav.net.	86400	A	192.168.5.159	;dynamic
+Galaxy-Note8.engrav.net.	86400	A	192.168.5.171	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.172	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.175	;dynamic
+03-BedroomWAP01.engrav.net.	86400	A	192.168.5.177	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.178	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.185	;dynamic
+SonosZP.engrav.net.	86400	A	192.168.5.198	;dynamic
+ESP326197.engrav.net.	86400	A	192.168.5.200	;dynamic
+Galaxy-S8.engrav.net.	86400	A	192.168.5.202	;dynamic
+Galaxy-S20-5G.engrav.net.	86400	A	192.168.5.204	;dynamic
+amazon-1a254a5c6.engrav.net.	86400	A	192.168.5.215	;dynamic
+Charlottes-Galaxy-S10.engrav.net.	86400	A	192.168.5.219	;dynamic
+Projects.engrav.net.	86400	A	192.168.5.221	;dynamic
+TIVO-A95043B5864CD72.engrav.net.	86400	A	192.168.5.230	;dynamic
+iRobot-F39A891590E64CA69284575CEC92A0F8.engrav.net.	86400	A	192.168.5.232	;dynamic
+DELLA189BA.engrav.net.	86400	A	192.168.5.235	;dynamic
+amazon-ccbda073c.engrav.net.	86400	A	192.168.5.239	;dynamic
+02-UnknownWAP02.engrav.net.	86400	A	192.168.5.243	;dynamic
+DELL73FB26.engrav.net.	86400	A	192.168.5.245	;dynamic

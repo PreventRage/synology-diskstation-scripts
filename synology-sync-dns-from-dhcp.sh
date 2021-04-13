@@ -5,33 +5,64 @@ ScriptDir=$(dirname $ScriptPath)
 
 # -----------------------------------------------------------------------------
 
+LogEmptyLine=
+
 Log(){
-    d=$(date +%F_%T)
-    echo "$d - $*"
-}
-
-Fail(){
-  Log "Error:" "$@"
-  exit 1
-}
-
-EchoOver(){
-  if [ "$1" ]; then
-    c=$((${#1}+1))
-      # expression containing an arithmetic expression
-      # ${#varname} is length of value of varname
-    echo "$1 ${2:$c}"
+  if [ "$1" = "" ]; then
+    if [ "$LogEmptyLine" ]; then
+      echo
+      LogEmptyLine=
+    fi
   else
-    echo "$2"
+    echo $1
+    LogEmptyLine=1
   fi
 }
 
-EchoBegin(){
-  EchoOver "$1" ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+LogT(){
+    d=$(date "+%F %T")
+    Log "$* ($d)"
 }
 
-EchoEnd(){
-  EchoOver "$1" "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+Fail(){
+  LogT "Error:" "$@"
+  exit 1
+}
+
+LogFile(){
+  x=${!1}
+  if [ "$x" ]; then
+    # $1 was indeed the name of a variable
+    Label="$1"
+    Path=$x
+    if [ ! -f "$Path" ]; then
+      Log "Error: $Label [$Path] does not exist"
+      return 1
+    fi
+  else
+    # $1 is presumably the actual path to the file
+    Path=$1
+    if [ ! -f "$Path" ]; then
+      Log "Error: [$Path] does not exist"
+      return 1
+    fi
+    Label=$(basename "$Path")
+  fi
+
+  Log
+  Log "BEGIN $Label"
+  Log "[$Path]"
+  Log "--------------------------------------------------------------------------------"
+  cat "$Path"
+  Log "--------------------------------------------------------------------------------"
+  Log "END $Label"
+  Log 
+}
+
+LogFileIfVerbose(){
+  if [ "$Verbose" ]; then
+    LogFile "$@"
+  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -75,20 +106,13 @@ done
 
 # TODO: Actually write help
 
-
-# -----------------------------------------------------------------------------
-# Settings
-
-
-
-
 # -----------------------------------------------------------------------------
 
 Update()(
   # That "("" makes this a "subshell" function which can have its own inner functions
 
 
-  Log "Updating DNS to reflect current DHCP state"
+  LogT "Updating DNS to reflect current DHCP state"
 
   # -----------------------------------------------------------------------------
 
@@ -152,7 +176,7 @@ Update()(
   if [ -f $y ]; then
     Log "Forward master already backed up for today [$y]"
   else
-    Log "Backing up forward master [$y]"
+    LogT "Backing up forward master [$y]"
     cp -a $ZonePath/$ForwardMasterFile $y
   fi
 
@@ -160,19 +184,23 @@ Update()(
   if [ -f $y ]; then
     Log "Reverse master already backed up for today [$y]"
   else
-    Log "Backing up reverse master [$y]"
+    LogT "Backing up reverse master [$y]"
     cp -a $ZonePath/$ReverseMasterFile $y
   fi
 
   # ---------------------------------------------------------------------------
 
-  DnsZoneFileContentsWithoutDynamicHosts () {
-    # Pass in the contents of a DNS Zone File (forward or reverse master)
+  DnsRecordsFromZoneFile () {
+    # Pass in $1 = path to a DNS Zone File (forward or reverse master)
     # Filters out any line/record that ends with ;dynamic (those that came from DHCP)
     # to create the start point of an update.
-    echo "$1" |
     awk '
+      BEGIN {
+        #FS="\t" # I think Synology DNS files use Tabs as separators exclusively
+      }
       {
+        if (substr($0, 1, 1) == "$") next
+
         if ($5 != ";dynamic") {
           PrintThis=1;
         } else {
@@ -180,20 +208,193 @@ Update()(
         }
       }
       (PrintThis == 1) {print $0 }
-    '
+    ' "$1"
+  }
+  # ---------------------------------------------------------------------------
+
+  DnsZoneFileWithoutDynamicHosts () {
+    # See https://en.wikipedia.org/wiki/Zone_file
+    # Pass in $1 = path to a DNS Zone File (forward or reverse master)
+    # Filters out any line/record that ends with ;dynamic (those that came from DHCP)
+    # to create the start point of an update.
+    awk -D '
+      function Log(msg) {
+        printf("%s:%d: %s\n", FILENAME, FNR, msg) > "/dev/stdout"
+      }
+
+      function Error(msg) {
+        printf("%s:%d: Error: %s\n", FILENAME, FNR, msg) > "/dev/stderr"
+        _Error_Exit = 1
+        exit 1
+      }
+
+      function Assert(condition, msg)
+      {
+        if (!condition) {
+          Error("Assertion Failed: " msg)
+        }
+      }
+
+      function InitRecord(r,
+        lines) {
+        delete r # empties the array
+        lines[1] = "" # now lines is an array
+        Assert()
+        delete lines # now lines is an _empty_ array
+        Log("Before assign")
+        r["Lines"] = lines
+        Log("After assign")
+        r["State"] = 1 # Initialized
+      }
+
+      function IsRecordInitialized(r) {
+        return r["State"] == 1
+      }
+
+      function IsRecordInProgress(r) {
+        return r["State"] == 2
+      }
+      
+      function IsRecordComplete(r) {
+        return r["State"] == 3
+      }
+
+      function AddLineToRecord(r, line,
+        lines) {
+        lines = r["Lines"]
+#        count = length(lines)
+        lines[count + 1] = line
+        r["State"] = 3
+        Assert(IsRecordComplete(r))
+      }
+
+      function ProcessRecord(r,
+        lines, line) {
+        lines = r["Lines"]
+        for (line in lines) {
+          print line
+        }
+      }
+
+# {
+#     if (p1++ > 3)
+#         return
+
+#     a[p1] = p1
+
+#     some_func(p1)
+
+#     printf("At level %d, index %d %s found in a\n",
+#          p1, (p1 - 1), (p1 - 1) in a ? "is" : "is not")
+#     printf("At level %d, index %d %s found in a\n",
+#          p1, p1, p1 in a ? "is" : "is not")
+#     print ""
+# }
+      BEGIN {
+        #FS="\t" # Set field separator
+        InitRecord(Record)
+        Assert(IsRecordInitialized(Record))
+        InMultiLineParentheses = 0
+      }
+
+      {
+        AddLineToRecord(Record, $0)
+        if (IsRecordComplete(Record)) {
+          ProcessRecord(Record)
+          InitRecord(Record)
+        }
+        next
+
+        Line=$0
+        Comment=""
+
+        if (match(Line, /^(.*);(.*)$/, Matches)) {
+          Line=Matches[1]
+          Comment=Matches[2]
+        } 
+
+
+        if (InMultiLineParentheses) {
+          print "[Continued]" $0
+          if ($0 ~ /\)$/) { # line ends with )
+            InMultiLineParentheses=0
+          }
+          next
+        }
+        if ($1 ~ /^\$/) {
+          print "[Directive]" $0
+          next
+        }
+        if (!InMultiLineParentheses) {
+          if ($0 ~ /^.*\($/) { # line ends with (
+            InMultiLineParentheses=1
+            print "ML!>" $0
+            next
+          }
+        }
+        print "[" $1 "][" $2 "][" $3 "][" $4 "][" $5 "][" $6 "]"
+        next
+        if ($5 != ";dynamic") {
+          PrintThis=1;
+        } else {
+          PrintThis=0;
+        }
+      }
+
+      END {
+        if (_Error_Exit) {
+          exit 1
+        }
+        if (IsRecordIncomplete(Record)) {
+        }
+      }
+
+      (PrintThis == 1) {print $0 }
+    ' "$1"
   }
 
   # ---------------------------------------------------------------------------
 
-  DhcpAsDnsHostRecords () {
-    # Pass in $1 "A" for A records and "PTR" for PTR records.
-    # Process the DHCP static and dynamic records
-    # Pass in $2 a comma-delimited list of records to ignore (presumably because they're already in the DNS zone file)
-    # Logic is the same for PTR and A records. Just a different print output.
-    # Sorts and remove duplicates. Filters records you don't want.
-    awk -v YourNetworkName=$YourNetworkName -v RecordType=$1  -v IgnoreHosts=$2 -v NetworkInterfaces=$NetworkInterfaces '
+  HostNamesFromDnsZoneFile () {
+  # Pass in $1 = path to a DNS Zone File (forward or reverse master)
+  # Reduces to a list of host names.
+    awk '
       BEGIN {
-        # Set awks field separator
+        FS="\t" # Set awks field separator
+        InMultiLineParentheses=0
+      }
+
+      {
+        if ($0 ~ /^.*\($/) {
+          print $0
+        }
+        next
+
+        # Theres some non-host-record lines at the start of a zone file but conveniently
+                # they all have 1 or 2 "fields" according
+        # to awk.
+        # Then a more subtle filter. We also omit any host-records that have 3 fields
+        # (which will be host name, record type, address) because they dont have a TTL
+        # field. Which avoids the namespace records (there seem usually to be two,
+        # one of type NS and one of type A/host).
+        # We also filter out any record with more then 5 fields presuming that the 6th
+        # field would be a ;dynamic comment.
+        if (NF>3 && NF<6 && ($3 == "A" || $4 == "A")) print $1
+      }
+    ' "$1"
+  }
+
+  # ---------------------------------------------------------------------------
+
+  DnsHostRecordsFromDhcp () {
+    # $1 is "A" for A records and "PTR" for PTR records.
+    # [Optional] $2 is a file (path) containing a sorted list of host names (forward or reverse) that we'll skip (not emit) because you've got them handled some other way.
+    # Process the DHCP static and dynamic records.
+    # Sorts and remove duplicates. Filters out records you don't want.
+
+    awk -v YourNetworkName=$YourNetworkName -v RecordType=$1 -v NetworkInterfaces=$NetworkInterfaces '
+      BEGIN {
+        # Set field separator
         FS="[\t =,]";
       }
 
@@ -225,14 +426,6 @@ Update()(
         split(IpAddress, IpA, ".")
         IpAddressReversed = IpA[4] "." IpA[3] "." IpA[2] "." IpA[1]
 
-        # Ignore some hosts
-        if (RecordType == "A") {
-          if (index(IgnoreHosts, Name "." YourNetworkName ".," ) > 0) { next }
-        }
-        else if (RecordType == "PTR") {
-          if (index(IgnoreHosts, IpAddressReversed ".in-addr.arpa.," ) > 0) { next }
-        }
-
         # Remove invalid characters according to rfc952
         gsub(/([^a-zA-Z0-9-]*|^[-]*|[-]*$)/, "", Name)
         if (Name == "") { next }
@@ -247,34 +440,16 @@ Update()(
           print Key "\t" IpAddressReversed ".in-addr.arpa.\t" Ttl "\tPTR\t" Name "." YourNetworkName ".\t;dynamic"
         }
       }
-    ' $DhcpFiles | sort | cut -f 2- | uniq	
+    ' $DhcpFiles |
+    if [ -f "$2" ]; then
+      grep -f "$2" -F -v # only keep lines that don't match any lines in the file $2
+    else
+      cat
+    fi |
+    sort |
+    cut -f 2- |
+    uniq
   }
-
-  # ---------------------------------------------------------------------------
-
-  HostNamesFromDnsZoneFileContent () {
-    echo "$1" |
-    awk '
-      BEGIN {
-        # Set awks field separator
-        FS="\t"
-      }
-      {
-        # Theres some non-host-record lines at the start of a zone file but conveniently
-        # they all have 0 or 1 tab character in them and thus 1 or 2 "fields" according
-        # to awk.
-        # Then a more subtle filter. We also omit any host-records that have 3 fields
-        # (which will be host name, record type, address) because they dont have a TTL
-        # field. Which avoids the namespace records (there seem usually to be two,
-        # one of type NS and one of type A/host).
-        # We also filter out any record with more then 5 fields presuming that the 6th
-        # field would be a ;dynamic comment.
-        if (NF>3 && NF<6 && ($3 == "A" || $4 == "A")) print $1
-      }
-    ' |
-    tr '\n' ','
-  }
-
 
   # ---------------------------------------------------------------------------
 
@@ -294,46 +469,38 @@ Update()(
   # FORWARD MASTER FILE FIRST - (Logic is the same for both)
   # Print everything except for PTR and A records.
   # The only exception are "ns.domain" records.  We keep those.
-  #Assumptions:
+  # Assumptions:
   # PTR and A records should be removed unless they contain "ns.<YourNetworkName>."
-  Log "Updating forward master [$ForwardMasterFile]"
+  LogT "Updating forward master [$ForwardMasterFile]"
   ExistingDnsZoneFile=$ZonePath/$ForwardMasterFile
+  LogFileIfVerbose "ExistingDnsZoneFile"
 
-  ExistingDnsZoneFileContent=$(cat $ExistingDnsZoneFile)
-  if [ "$Verbose" ]; then
-    EchoBegin "ExistingDnsZoneFileContent"
-    echo "$ExistingDnsZoneFileContent"
-    EchoEnd "ExistingDnsZoneFileContent"
-  fi
+  FilteredDnsZoneFile=$TempDir/$ForwardMasterFile-filtered
+  DnsZoneFileWithoutDynamicHosts "$ExistingDnsZoneFile" > "$FilteredDnsZoneFile"
+  # echo "$FilteredDnsContents" > $BackupDir/$ForwardMasterFile.new
+  LogFileIfVerbose "FilteredDnsZoneFile"
 
-  FilteredDnsZoneFileContent=$(DnsZoneFileContentsWithoutDynamicHosts "$ExistingDnsZoneFileContent")
-  if [ "$Verbose" ]; then
-    EchoBegin "FilteredDnsZoneFileContent"
-    echo "$FilteredDnsZoneFileContent"
-    EchoEnd "FilteredDnsZoneFileContent"
-  fi
+  KeptHostsFile=$TempDir/$ForwardMasterFile-kept-hosts
+  HostNamesFromDnsZoneFile "$FilteredDnsZoneFile" | sort | uniq > "$KeptHostsFile"
+  LogFileIfVerbose "KeptHostsFile"
 
-  KeptHostNames=$(HostNamesFromDnsZoneFileContent "$FilteredDnsZoneFileContent")
-  if [ "$Verbose" ]; then
-    EchoBegin "KeptHostNames"
-    echo $KeptHostNames
-    EchoEnd "KeptHostNames"
-  fi
-
-  DhcpAsDnsHostRecords "A" $KeptHostNames
+  DnsHostRecordsFromDhcp "A" "$KeptHostsFile"
 
   #echo "$FilteredDnsContents" > $BackupDir/$ForwardMasterFile.new
-  #Log "adding these DHCP leases to DNS forward master file:"
-  #DhcpAsDnsHostRecords "A" $STATIC
+  #LogT "adding these DHCP leases to DNS forward master file:"
 
   #STATIC=$(echo "$PARTIAL"|awk '{if(NF>3 && NF<6) print $1}'| tr '\n' ',')
   #echo "$PARTIAL"  > $BackupDir/$ForwardMasterFile.new
-  #Log "adding these DHCP leases to DNS forward master file:"
-  #DhcpAsDnsHostRecords "A" $STATIC
+  #LogT "adding these DHCP leases to DNS forward master file:"
+  #DnsHostRecordsFromDhcp "A" $STATIC
   #echo
-  #DhcpAsDnsHostRecords "A" $STATIC >> $BackupDir/$ForwardMasterFile.new
+  #DnsHostRecordsFromDhcp "A" $STATIC >> $BackupDir/$ForwardMasterFile.new
 
   #incrementSerial $BackupDir/$ForwardMasterFile.new > $BackupDir/$ForwardMasterFile.bumped
+
+
+
+
 )
 
 # -----------------------------------------------------------------------------
@@ -341,12 +508,12 @@ Update()(
 
 if [ "$Poll" ]; then
   # Loop forever Update()ing whenever it seems necessary
-  Log "Polling for DHCP state changes..."
+  LogT "Polling for DHCP state changes..."
   DhcpLogFile=/etc/dhcpd/dhcpd-leases.log
   while true; do    
     ChangeTime=`stat $DhcpLogFile | grep Modify`
     if [[ "$ChangeTime" != "$LastChangeTime" ]]; then
-      Log "DHCP state changed"
+      LogT "DHCP state changed"
       Update
       LastChangeTime=$ChangeTime
     fi
@@ -378,28 +545,28 @@ exit 0
 # The only exception are "ns.domain" records.  We keep those.
 #Assumptions:
 # PTR and A records should be removed unless they contain "ns.<YourNetworkName>."
-Log "Regenerating reverse master file $ReverseMasterFile"
+LogT "Regenerating reverse master file $ReverseMasterFile"
 PARTIAL="$(DnsZoneFileContentsWithoutDynamicHosts $ZonePath/$ReverseMasterFile)"
 STATIC=$(echo "$PARTIAL"|awk '{if(NF>3 && NF<6) print $1}'| tr '\n' ',')
-Log "Reverse master file static DNS addresses:"
+LogT "Reverse master file static DNS addresses:"
 echo "$PARTIAL"
 echo
 echo "$PARTIAL" > $BackupDir/$ReverseMasterFile.new
-Log "adding these DHCP leases to DNS reverse master file: "
-DhcpAsDnsHostRecords "PTR" $STATIC
+LogT "adding these DHCP leases to DNS reverse master file: "
+DnsHostRecordsFromDhcp "PTR" $STATIC
 echo
-DhcpAsDnsHostRecords "PTR" $STATIC >> $BackupDir/$ReverseMasterFile.new
+DnsHostRecordsFromDhcp "PTR" $STATIC >> $BackupDir/$ReverseMasterFile.new
 incrementSerial $BackupDir/$ReverseMasterFile.new > $BackupDir/$ReverseMasterFile.bumped
 
 
 ##########################################################################
 # Ensure the owner/group and modes are set at default
 # then overwrite the original files
-Log "Overwriting with updated files: $ForwardMasterFile $ReverseMasterFile"
+LogT "Overwriting with updated files: $ForwardMasterFile $ReverseMasterFile"
 if ! chown nobody:nobody $BackupDir/$ForwardMasterFile.bumped $BackupDir/$ReverseMasterFile.bumped ; then
-  Log "Error:  Cannot change file ownership"
-  Log ""
-  Log "Try running this script as root for correct permissions"
+  LogT "Error:  Cannot change file ownership"
+  LogT ""
+  LogT "Try running this script as root for correct permissions"
   exit 4
 fi
 chmod 644 $BackupDir/$ForwardMasterFile.bumped $BackupDir/$ReverseMasterFile.bumped
@@ -413,7 +580,7 @@ mv -f $BackupDir/$ReverseMasterFile.bumped $ZonePath/$ReverseMasterFile
 # Reload the server config after modifications
 $ZoneRootDir/script/reload.sh
 
-Log "$0 complete."
+LogT "$0 complete."
 exit 0
 
 
